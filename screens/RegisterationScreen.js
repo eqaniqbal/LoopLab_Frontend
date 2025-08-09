@@ -1,3 +1,4 @@
+import { Picker } from "@react-native-picker/picker";
 import * as ImagePicker from "expo-image-picker";
 import { LinearGradient } from "expo-linear-gradient";
 import React, { useState } from "react";
@@ -15,19 +16,20 @@ import {
   View,
 } from "react-native";
 
-// IMPORTANT: Replace 'localhost' with your machine IP when testing on real device/emulator
-const STRAPI_URL = "http://localhost:1337";
+const STRAPI_URL = "http://localhost:1337"; // Change to your backend URL
 
 export default function RegistrationScreen({ navigation }) {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [user_name, setUserName] = useState("");
+  const [user_email, setUserEmail] = useState("");
+  const [user_password, setUserPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [user_roles, setUserRoles] = useState("student"); // match Strapi enum lowercase
   const [image, setImage] = useState(null);
   const [loading, setLoading] = useState(false);
-  const roles = ["Student", "Teacher"];  // exactly same as backend enum values
-const [selectedRole, setSelectedRole] = useState("Student");
 
+  const roles = ["student", "teacher"];
+
+  // Request permission & pick image from gallery
   async function pickImage() {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
@@ -35,7 +37,7 @@ const [selectedRole, setSelectedRole] = useState("Student");
       return;
     }
 
-    let result = await ImagePicker.launchImageLibraryAsync({
+    const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.7,
       allowsEditing: true,
@@ -47,6 +49,7 @@ const [selectedRole, setSelectedRole] = useState("Student");
     }
   }
 
+  // Upload image to Strapi upload endpoint
   async function uploadImage(image) {
     const formData = new FormData();
     const uriParts = image.uri.split(".");
@@ -60,92 +63,68 @@ const [selectedRole, setSelectedRole] = useState("Student");
 
     const response = await fetch(`${STRAPI_URL}/api/upload`, {
       method: "POST",
-      // DO NOT set Content-Type header for multipart/form-data
       body: formData,
     });
 
     const data = await response.json();
 
     if (data?.data && Array.isArray(data.data) && data.data.length > 0) {
-      return data.data[0]; // returns uploaded file object with id etc.
+      return data.data[0]; // Return uploaded file object
     } else {
       throw new Error("Image upload failed");
     }
   }
 
-const handleRegister = async () => {
-  if (!email || !password || !confirmPassword || !name) {
-    Alert.alert("Validation Error", "Please fill in all required fields.");
-    return;
-  }
-  if (password !== confirmPassword) {
-    Alert.alert("Validation Error", "Passwords do not match.");
-    return;
-  }
-  setLoading(true);
-
-  try {
-    let uploadedImage = null;
-
-    // Upload image first (if any)
-    if (image) {
-      uploadedImage = await uploadImage(image);
-    }
-
-    // Step 1: Register with default fields only
-    const userData = {
-      username: name,
-      email,
-      password,
-    };
-
-    const res = await fetch(`${STRAPI_URL}/api/auth/local/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(userData),
-    });
-
-    const data = await res.json();
-
-    if (!res.ok) {
-      Alert.alert("Error", data?.error?.message || "Registration failed");
-      setLoading(false);
+  // Handle registration submission
+  const handleRegister = async () => {
+    if (!user_name || !user_email || !user_password || !confirmPassword) {
+      Alert.alert("Validation Error", "Please fill in all required fields.");
       return;
     }
+    if (user_password !== confirmPassword) {
+      Alert.alert("Validation Error", "Passwords do not match.");
+      return;
+    }
+    setLoading(true);
 
-    // Step 2: Update user with extra fields Roles and profile_photo
-    if (data.user && data.jwt) {
-      const updateBody = {
-        Roles: selectedRole,
-      };
-      if (uploadedImage) {
-        updateBody.profile_photo = uploadedImage.id;
+    try {
+      let uploadedImage = null;
+      if (image) {
+        uploadedImage = await uploadImage(image);
       }
 
-      const updateRes = await fetch(`${STRAPI_URL}/api/users/${data.user.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${data.jwt}`,
-        },
-        body: JSON.stringify(updateBody),
+      // Prepare data to send
+      const userData = {
+        user_name,
+        user_email,
+        user_password,
+        user_roles,
+        profile_photo: uploadedImage ? uploadedImage.id : null,
+      };
+
+      const res = await fetch(`${STRAPI_URL}/api/user-table/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(userData),
       });
 
-      if (!updateRes.ok) {
-        const updateData = await updateRes.json();
-        Alert.alert("Warning", "User registered but update failed: " + (updateData?.error?.message || JSON.stringify(updateData)));
-      }
-    }
+      const data = await res.json();
 
-    Alert.alert("Success", "Registration successful! Please login.");
-    navigation.navigate("Login");
-  } catch (error) {
-    console.error(error);
-    Alert.alert("Error", "Something went wrong");
-  } finally {
-    setLoading(false);
-  }
-};
+      if (!res.ok) {
+        Alert.alert("Registration Error", data.error?.message || "Registration failed");
+        setLoading(false);
+        return;
+      }
+
+      Alert.alert("Success", "Registration successful! Please login.");
+      navigation.navigate("Login");
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <KeyboardAvoidingView
@@ -160,11 +139,7 @@ const handleRegister = async () => {
       >
         <View style={styles.formContainer}>
           {/* Profile photo picker */}
-          <TouchableOpacity
-            style={styles.imagePicker}
-            onPress={pickImage}
-            activeOpacity={0.7}
-          >
+          <TouchableOpacity style={styles.imagePicker} onPress={pickImage} activeOpacity={0.7}>
             {image ? (
               <Image source={{ uri: image.uri }} style={styles.profileImage} />
             ) : (
@@ -176,23 +151,23 @@ const handleRegister = async () => {
           <TextInput
             style={styles.input}
             placeholder="Full Name"
-            value={name}
-            onChangeText={setName}
+            value={user_name}
+            onChangeText={setUserName}
             autoCapitalize="words"
           />
           <TextInput
             style={styles.input}
-            placeholder="Email (min 6 chars)"
-            value={email}
-            onChangeText={setEmail}
+            placeholder="Email"
+            value={user_email}
+            onChangeText={setUserEmail}
             keyboardType="email-address"
             autoCapitalize="none"
           />
           <TextInput
             style={styles.input}
-            placeholder="Password (min 6 chars)"
-            value={password}
-            onChangeText={setPassword}
+            placeholder="Password"
+            value={user_password}
+            onChangeText={setUserPassword}
             secureTextEntry
           />
           <TextInput
@@ -202,6 +177,20 @@ const handleRegister = async () => {
             onChangeText={setConfirmPassword}
             secureTextEntry
           />
+
+          {/* Role picker */}
+          <View style={styles.pickerContainer}>
+            <Text style={styles.pickerLabel}>Role</Text>
+            <Picker
+              selectedValue={user_roles}
+              onValueChange={(itemValue) => setUserRoles(itemValue)}
+              style={styles.picker}
+            >
+              {roles.map((role) => (
+                <Picker.Item label={role.charAt(0).toUpperCase() + role.slice(1)} value={role} key={role} />
+              ))}
+            </Picker>
+          </View>
 
           {/* Register button */}
           <TouchableOpacity
@@ -266,6 +255,24 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     fontSize: 16,
     marginBottom: 16,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: "#C4B5FD",
+    borderRadius: 12,
+    marginBottom: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  pickerLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#6B46C1",
+    marginBottom: 4,
+  },
+  picker: {
+    height: 40,
+    width: "100%",
   },
   registerButton: {
     borderRadius: 16,
