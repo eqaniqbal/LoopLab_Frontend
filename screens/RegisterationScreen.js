@@ -19,15 +19,15 @@ import {
 const STRAPI_URL = "http://localhost:1337"; // Change to your backend URL
 
 export default function RegistrationScreen({ navigation }) {
-  const [user_name, setUserName] = useState("");
-  const [user_email, setUserEmail] = useState("");
-  const [user_password, setUserPassword] = useState("");
+  const [userName, setUserName] = useState("");
+  const [userEmail, setUserEmail] = useState("");
+  const [userPassword, setUserPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [user_roles, setUserRoles] = useState("student"); // match Strapi enum lowercase
+  const [userRole, setUserRole] = useState("student"); // default role for user-profile.role
   const [image, setImage] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const roles = ["student", "teacher"];
+  const roles = ["admin", "student", "teacher"];
 
   // Request permission & pick image from gallery
   async function pickImage() {
@@ -64,6 +64,9 @@ export default function RegistrationScreen({ navigation }) {
     const response = await fetch(`${STRAPI_URL}/api/upload`, {
       method: "POST",
       body: formData,
+      headers: {
+        // no content-type header, browser sets it including boundary for multipart form-data
+      },
     });
 
     const data = await response.json();
@@ -75,56 +78,85 @@ export default function RegistrationScreen({ navigation }) {
     }
   }
 
-  // Handle registration submission
-  const handleRegister = async () => {
-    if (!user_name || !user_email || !user_password || !confirmPassword) {
-      Alert.alert("Validation Error", "Please fill in all required fields.");
-      return;
-    }
-    if (user_password !== confirmPassword) {
-      Alert.alert("Validation Error", "Passwords do not match.");
-      return;
-    }
-    setLoading(true);
+const handleRegister = async () => {
+  if (!userName || !userEmail || !userPassword || !confirmPassword) {
+    Alert.alert("Validation Error", "Please fill in all required fields.");
+    return;
+  }
+  if (userPassword !== confirmPassword) {
+    Alert.alert("Validation Error", "Passwords do not match.");
+    return;
+  }
+  setLoading(true);
 
-    try {
-      let uploadedImage = null;
-      if (image) {
-        uploadedImage = await uploadImage(image);
-      }
+  try {
+    // 1. Register user with built-in Strapi auth/local/register
+    const registerResponse = await fetch(`${STRAPI_URL}/api/auth/local/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: userName,
+        email: userEmail,
+        password: userPassword,
+      }),
+    });
 
-      // Prepare data to send
-      const userData = {
-        user_name,
-        user_email,
-        user_password,
-        user_roles,
-        profile_photo: uploadedImage ? uploadedImage.id : null,
-      };
+    const registerData = await registerResponse.json();
 
-      const res = await fetch(`${STRAPI_URL}/api/user-table/register`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(userData),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        Alert.alert("Registration Error", data.error?.message || "Registration failed");
-        setLoading(false);
-        return;
-      }
-
-      Alert.alert("Success", "Registration successful! Please login.");
-      navigation.navigate("Login");
-    } catch (error) {
-      console.error(error);
-      Alert.alert("Error", "Something went wrong");
-    } finally {
+    if (!registerResponse.ok) {
+      Alert.alert("Registration Error", registerData.error?.message || "Failed to register user.");
       setLoading(false);
+      return;
     }
-  };
+
+    const { user, jwt } = registerData;
+    const userId = user.id;
+
+    // 2. Upload image if any
+    let uploadedImageId = null;
+    if (image) {
+      const uploadedImage = await uploadImage(image);
+      uploadedImageId = uploadedImage.id;
+    }
+
+    // 3. Create user-profile linked to this user, including email and password copy
+    const profileResponse = await fetch(`${STRAPI_URL}/api/user-profiles`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${jwt}`,
+      },
+      body: JSON.stringify({
+        data: {
+          user: userId,
+          role: userRole,            // your enum field for app roles
+          photo: uploadedImageId,    // media relation id or null
+          userstatus: "active",
+          email: userEmail,          // copy of email
+          password: userPassword,    // copy of password (plain text)
+          name:userName,
+        },
+      }),
+    });
+
+    const profileData = await profileResponse.json();
+
+    if (!profileResponse.ok) {
+      Alert.alert("Profile Creation Error", profileData.error?.message || "Failed to create user profile.");
+      setLoading(false);
+      return;
+    }
+
+    Alert.alert("Success", "Registration successful! Please login.");
+    navigation.navigate("Login");
+  } catch (error) {
+    console.error(error);
+    Alert.alert("Error", "Something went wrong during registration.");
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   return (
     <KeyboardAvoidingView
@@ -151,14 +183,14 @@ export default function RegistrationScreen({ navigation }) {
           <TextInput
             style={styles.input}
             placeholder="Full Name"
-            value={user_name}
+            value={userName}
             onChangeText={setUserName}
             autoCapitalize="words"
           />
           <TextInput
             style={styles.input}
             placeholder="Email"
-            value={user_email}
+            value={userEmail}
             onChangeText={setUserEmail}
             keyboardType="email-address"
             autoCapitalize="none"
@@ -166,7 +198,7 @@ export default function RegistrationScreen({ navigation }) {
           <TextInput
             style={styles.input}
             placeholder="Password"
-            value={user_password}
+            value={userPassword}
             onChangeText={setUserPassword}
             secureTextEntry
           />
@@ -182,26 +214,24 @@ export default function RegistrationScreen({ navigation }) {
           <View style={styles.pickerContainer}>
             <Text style={styles.pickerLabel}>Role</Text>
             <Picker
-              selectedValue={user_roles}
-              onValueChange={(itemValue) => setUserRoles(itemValue)}
+              selectedValue={userRole}
+              onValueChange={(itemValue) => setUserRole(itemValue)}
               style={styles.picker}
             >
               {roles.map((role) => (
-                <Picker.Item label={role.charAt(0).toUpperCase() + role.slice(1)} value={role} key={role} />
+                <Picker.Item
+                  label={role.charAt(0).toUpperCase() + role.slice(1)}
+                  value={role}
+                  key={role}
+                />
               ))}
             </Picker>
           </View>
 
           {/* Register button */}
-          <TouchableOpacity
-            onPress={handleRegister}
-            disabled={loading}
-            style={styles.registerButton}
-          >
+          <TouchableOpacity onPress={handleRegister} disabled={loading} style={styles.registerButton}>
             <LinearGradient colors={["#7E5BEF", "#B4A5F7"]} style={styles.gradient}>
-              <Text style={styles.registerButtonText}>
-                {loading ? "Registering..." : "Register"}
-              </Text>
+              <Text style={styles.registerButtonText}>{loading ? "Registering..." : "Register"}</Text>
             </LinearGradient>
           </TouchableOpacity>
 
@@ -209,9 +239,7 @@ export default function RegistrationScreen({ navigation }) {
           <View style={styles.loginRedirect}>
             <Text>Already have an account? </Text>
             <TouchableOpacity onPress={() => navigation.navigate("Login")}>
-              <Text style={{ color: "#7E5BEF", textDecorationLine: "underline" }}>
-                Login
-              </Text>
+              <Text style={{ color: "#7E5BEF", textDecorationLine: "underline" }}>Login</Text>
             </TouchableOpacity>
           </View>
         </View>

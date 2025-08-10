@@ -1,18 +1,16 @@
-import * as AuthSession from "expo-auth-session";
 import { LinearGradient } from "expo-linear-gradient";
-import * as WebBrowser from "expo-web-browser";
-import React, { useState } from "react";
+import { useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 const STRAPI_URL = "http://localhost:1337";
@@ -21,7 +19,6 @@ export default function LoginScreen({ navigation }) {
   const [darkMode, setDarkMode] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showSocialModal, setShowSocialModal] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const theme = darkMode
@@ -34,7 +31,7 @@ export default function LoginScreen({ navigation }) {
         gradient: ["#6B52AE", "#3D2C8D"],
         buttonText: "#FFFFFF",
         statusBar: "light-content",
-        link: "#9B84D6",
+        link: "#A89DEE",
       }
     : {
         background: "#FAFAFB",
@@ -48,39 +45,109 @@ export default function LoginScreen({ navigation }) {
         link: "#5A3FBF",
       };
 
-  const handleLogin = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${STRAPI_URL}/api/auth/local`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          identifier: email,
-          password,
-        }),
-      });
-      const data = await res.json();
-      if (data.jwt) {
-        navigation.navigate(`${data.user.role.name}Dashboard`);
-      } else {
-        alert(data.error?.message || "Login failed");
-      }
-    } catch {
-      alert("Something went wrong");
-    } finally {
-      setLoading(false);
-    }
-  };
+const handleLogin = async () => {
+  if (!email || !password) {
+    Alert.alert("Validation Error", "Please enter both email and password");
+    return;
+  }
 
-  const handleSocialLogin = async (provider) => {
-    const redirectUrl = AuthSession.makeRedirectUri();
-    const authUrl = `${STRAPI_URL}/api/connect/${provider}?redirect=${encodeURIComponent(
-      redirectUrl
-    )}`;
-    const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-    console.log(result);
-    setShowSocialModal(false);
-  };
+  setLoading(true);
+
+  try {
+    console.log("Starting login with email:", email);
+
+    // 1. Authenticate user with Strapi
+    const authRes = await fetch(`${STRAPI_URL}/api/auth/local`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        identifier: email,
+        password,
+      }),
+    });
+
+    const authData = await authRes.json();
+    console.log("Auth response:", authData);
+
+    if (!authRes.ok) {
+      Alert.alert("Login failed", authData.error?.message || "Invalid credentials");
+      setLoading(false);
+      return;
+    }
+
+    const { jwt, user } = authData;
+
+    // 2. Fetch user profile linked to this user by user id
+    const profileRes = await fetch(
+      `${STRAPI_URL}/api/user-profiles?filters[user][id][$eq]=${user.id}`,
+      {
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const profileData = await profileRes.json();
+    console.log("Profile API response:", profileData);
+
+    if (
+      !profileRes.ok ||
+      !profileData.data ||
+      profileData.data.length === 0
+    ) {
+      Alert.alert("Error", "User profile not found");
+      setLoading(false);
+      return;
+    }
+
+    // 3. Extract user profile object
+    // Adjust this according to your API response shape
+    const userProfile = profileData.data[0]; // If your response is flat, no `.attributes`
+
+    console.log("UserProfile:", userProfile);
+
+    if (!userProfile) {
+      Alert.alert("Login failed", "User profile data missing");
+      setLoading(false);
+      return;
+    }
+
+    if (userProfile.userstatus !== "active") {
+      Alert.alert("Login failed", `Your account status is ${userProfile.userstatus}`);
+      setLoading(false);
+      return;
+    }
+
+    const role = userProfile.role;
+
+    console.log("Role detected:", role);
+
+    // 4. Navigate based on role
+    switch (role) {
+      case "student":
+    navigation.navigate("Student", { userProfileId: userProfile.id });
+    break;
+  case "teacher":
+    navigation.navigate("Teacher", { userProfileId: userProfile.id,
+  userProfileName: userProfile.name});
+    break;
+  case "admin":
+    navigation.navigate("Admin", { userProfileId: userProfile.id });
+    break;
+      default:
+        Alert.alert("Login failed", "Invalid user role");
+        break;
+    }
+  } catch (error) {
+    console.error("Login error:", error);
+    Alert.alert("Error", error.message || "Something went wrong");
+  } finally {
+    setLoading(false);
+  }
+};
+
+
 
   return (
     <KeyboardAvoidingView
@@ -119,6 +186,7 @@ export default function LoginScreen({ navigation }) {
           autoCapitalize="none"
           value={email}
           onChangeText={setEmail}
+          editable={!loading}
         />
 
         <TextInput
@@ -135,13 +203,14 @@ export default function LoginScreen({ navigation }) {
           secureTextEntry
           value={password}
           onChangeText={setPassword}
+          editable={!loading}
         />
 
         <TouchableOpacity
           onPress={handleLogin}
-          disabled={loading}
           activeOpacity={0.85}
           style={{ marginBottom: 15 }}
+          disabled={loading}
         >
           <LinearGradient colors={theme.gradient} style={styles.loginButton}>
             <Text style={[styles.loginText, { color: theme.buttonText }]}>
@@ -150,11 +219,11 @@ export default function LoginScreen({ navigation }) {
           </LinearGradient>
         </TouchableOpacity>
 
-        {/* Forgot password and register links */}
         <View style={styles.linksRow}>
           <TouchableOpacity
             onPress={() => navigation.navigate("ForgotPassword")}
             activeOpacity={0.7}
+            disabled={loading}
           >
             <Text style={[styles.linkText, { color: theme.link }]}>
               Forgot Password?
@@ -166,69 +235,14 @@ export default function LoginScreen({ navigation }) {
           <TouchableOpacity
             onPress={() => navigation.navigate("Registeration")}
             activeOpacity={0.7}
+            disabled={loading}
           >
             <Text style={[styles.linkText, { color: theme.link }]}>
               Register
             </Text>
           </TouchableOpacity>
         </View>
-
-        <TouchableOpacity
-          style={styles.socialLoginTrigger}
-          onPress={() => setShowSocialModal(true)}
-          activeOpacity={0.7}
-        >
-          <Text style={[styles.socialLoginTriggerText, { color: theme.text }]}>
-            Or continue with social login
-          </Text>
-        </TouchableOpacity>
       </ScrollView>
-
-      {/* Social Login Modal */}
-      <Modal
-        visible={showSocialModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowSocialModal(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View
-            style={[
-              styles.modalContent,
-              { backgroundColor: darkMode ? "#2E2363" : "#E8E0FF" },
-            ]}
-          >
-            <Text
-              style={[
-                styles.modalTitle,
-                { color: theme.text, marginBottom: 15 },
-              ]}
-            >
-              Social Login
-            </Text>
-            <TouchableOpacity
-              style={[styles.socialButton, { backgroundColor: "#DB4437" }]}
-              onPress={() => handleSocialLogin("google")}
-            >
-              <Text style={styles.socialText}>Continue with Google</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.socialButton, { backgroundColor: "#1877F2" }]}
-              onPress={() => handleSocialLogin("facebook")}
-            >
-              <Text style={styles.socialText}>Continue with Facebook</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.modalCloseButton}
-              onPress={() => setShowSocialModal(false)}
-            >
-              <Text style={[styles.modalCloseText, { color: theme.text }]}>
-                Cancel
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -281,57 +295,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     paddingHorizontal: 5,
   },
-  socialLoginTrigger: {
-    alignItems: "center",
-  },
-  socialLoginTriggerText: {
-    fontSize: 16,
-    textDecorationLine: "underline",
-    fontWeight: "600",
-  },
   themeToggle: {
     position: "absolute",
     top: 45,
     right: 25,
     zIndex: 10,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 20,
-  },
-  modalContent: {
-    width: "100%",
-    maxWidth: 320,
-    borderRadius: 14,
-    padding: 20,
-    alignItems: "center",
-  },
-  modalTitle: {
-    fontSize: 22,
-    fontWeight: "bold",
-  },
-  socialButton: {
-    width: "100%",
-    paddingVertical: 14,
-    borderRadius: 14,
-    marginVertical: 8,
-    alignItems: "center",
-    elevation: 3,
-  },
-  socialText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "bold",
-  },
-  modalCloseButton: {
-    marginTop: 15,
-  },
-  modalCloseText: {
-    fontSize: 16,
-    fontWeight: "600",
-    textDecorationLine: "underline",
   },
 });
